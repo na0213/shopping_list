@@ -57,17 +57,26 @@ type ShoppingItem = {
   updated_at: string;
 };
 
+type EventCategory = {
+  id: string;
+  event_id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
 type PriceInputMode = "taxIncluded" | "taxExcluded";
 
 type CategoryTab = {
   key: string;
   label: string;
-  isEditable: boolean;
-  isDeletable: boolean;
 };
 
 const eventSelectColumns =
   "id,name,year,budget,note,status,created_at,updated_at";
+const eventCategorySelectColumns =
+  "id,event_id,name,sort_order,created_at,updated_at";
 const shoppingItemSelectColumns =
   "id,event_id,name,category,planned_quantity,actual_quantity,unit_price,actual_price,actual_price_excluding_tax,tax_rate,last_year_price,last_year_price_excluding_tax,note,is_checked,is_extra,sort_order,created_at,updated_at";
 
@@ -103,21 +112,6 @@ const normalizeCategoryName = (categoryName: string | null) => {
   return normalizedName || null;
 };
 
-const pushUniqueCategory = (categories: string[], categoryName: string) => {
-  if (!categories.includes(categoryName)) {
-    categories.push(categoryName);
-  }
-};
-
-const omitRecordKey = <T,>(record: Record<string, T>, keyToOmit: string) =>
-  Object.entries(record).reduce<Record<string, T>>((nextRecord, [key, value]) => {
-    if (key !== keyToOmit) {
-      nextRecord[key] = value;
-    }
-
-    return nextRecord;
-  }, {});
-
 export function App() {
   const isSupabaseConfigured = Boolean(supabase);
   const [session, setSession] = useState<Session | null>(null);
@@ -136,6 +130,7 @@ export function App() {
   const [eventNote, setEventNote] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [shoppingItems, setShoppingItems] = useState<ShoppingItem[]>([]);
+  const [eventCategories, setEventCategories] = useState<EventCategory[]>([]);
   const [isLoadingItems, setIsLoadingItems] = useState(false);
   const [isSavingItem, setIsSavingItem] = useState(false);
   const [itemName, setItemName] = useState("");
@@ -152,10 +147,11 @@ export function App() {
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [selectedCategoryKey, setSelectedCategoryKey] =
     useState(ALL_CATEGORY_KEY);
-  const [customCategories, setCustomCategories] = useState<string[]>([]);
-  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, string>>(
-    {},
-  );
+  const [itemCategoryKey, setItemCategoryKey] =
+    useState(UNCATEGORIZED_CATEGORY_KEY);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categoryName, setCategoryName] = useState("");
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
 
   const selectedEvent =
     events.find((bbqEvent) => bbqEvent.id === selectedEventId) ?? null;
@@ -183,10 +179,12 @@ export function App() {
         setEvents([]);
         setSelectedEventId(null);
         setShoppingItems([]);
+        setEventCategories([]);
         setPriceInputModes({});
         setSelectedCategoryKey(ALL_CATEGORY_KEY);
-        setCustomCategories([]);
-        setCategoryDrafts({});
+        setItemCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
+        setCategoryName("");
+        setIsCategoryModalOpen(false);
       }
       setIsCheckingSession(false);
     });
@@ -217,6 +215,7 @@ export function App() {
       setEvents([]);
       setSelectedEventId(null);
       setShoppingItems([]);
+      setEventCategories([]);
       setErrorMessage(FETCH_EVENTS_ERROR_MESSAGE);
       return;
     }
@@ -250,6 +249,27 @@ export function App() {
     setShoppingItems(data ?? []);
   };
 
+  const loadEventCategories = async (eventId: string) => {
+    if (!supabase || !session) {
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("event_categories")
+      .select(eventCategorySelectColumns)
+      .eq("event_id", eventId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      setEventCategories([]);
+      setErrorMessage(FETCH_ITEMS_ERROR_MESSAGE);
+      return;
+    }
+
+    setEventCategories(data ?? []);
+  };
+
   useEffect(() => {
     if (session) {
       void loadEvents();
@@ -259,16 +279,19 @@ export function App() {
   useEffect(() => {
     if (!selectedEvent) {
       setShoppingItems([]);
+      setEventCategories([]);
       setSelectedCategoryKey(ALL_CATEGORY_KEY);
-      setCustomCategories([]);
-      setCategoryDrafts({});
+      setItemCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
+      setCategoryName("");
+      setIsCategoryModalOpen(false);
       return;
     }
 
     setSelectedCategoryKey(ALL_CATEGORY_KEY);
-    setCustomCategories([]);
-    setCategoryDrafts({});
+    setItemCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
+    setCategoryName("");
     void loadShoppingItems(selectedEvent.id);
+    void loadEventCategories(selectedEvent.id);
   }, [selectedEvent?.id]);
 
   useEffect(() => {
@@ -294,6 +317,22 @@ export function App() {
   }, [isCreateEventOpen, isCreatingEvent]);
 
   useEffect(() => {
+    if (!isCategoryModalOpen) {
+      return;
+    }
+
+    const handleKeyDown = (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.key === "Escape" && !isSavingCategory) {
+        setErrorMessage("");
+        setIsCategoryModalOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isCategoryModalOpen, isSavingCategory]);
+
+  useEffect(() => {
     if (!supabase || !session || !selectedEvent) {
       return;
     }
@@ -311,6 +350,33 @@ export function App() {
         },
         () => {
           void loadShoppingItems(selectedEvent.id);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabaseClient.removeChannel(channel);
+    };
+  }, [session, selectedEvent?.id]);
+
+  useEffect(() => {
+    if (!supabase || !session || !selectedEvent) {
+      return;
+    }
+
+    const supabaseClient = supabase;
+    const channel = supabaseClient
+      .channel(`event-categories-${selectedEvent.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_categories",
+          filter: `event_id=eq.${selectedEvent.id}`,
+        },
+        () => {
+          void loadEventCategories(selectedEvent.id);
         },
       )
       .subscribe();
@@ -429,6 +495,20 @@ export function App() {
     setIsCreateEventOpen(false);
   };
 
+  const handleOpenCategoryModal = () => {
+    setErrorMessage("");
+    setCategoryName("");
+    setIsCategoryModalOpen(true);
+  };
+
+  const handleCloseCategoryModal = () => {
+    if (isSavingCategory) {
+      return;
+    }
+    setErrorMessage("");
+    setIsCategoryModalOpen(false);
+  };
+
   const resetItemForm = () => {
     setItemName("");
   };
@@ -443,10 +523,12 @@ export function App() {
   const handleBackToEvents = () => {
     setErrorMessage("");
     setIsMenuOpen(false);
+    setIsCategoryModalOpen(false);
     resetItemForm();
     setEventViewMode("shopping");
     setSelectedEventId(null);
     setShoppingItems([]);
+    setEventCategories([]);
   };
 
   const handleBudgetBlur = async () => {
@@ -497,6 +579,139 @@ export function App() {
     }
   };
 
+  const handleCreateCategory = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage("");
+
+    const normalizedName = normalizeCategoryName(categoryName);
+
+    if (
+      !supabase ||
+      !session ||
+      !selectedEvent ||
+      !normalizedName ||
+      normalizedName.length > 80
+    ) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
+    const existingCategory = eventCategories.find(
+      (category) => category.name.toLowerCase() === normalizedName.toLowerCase(),
+    );
+
+    if (existingCategory) {
+      setItemCategoryKey(existingCategory.name);
+      setSelectedCategoryKey(existingCategory.name);
+      setCategoryName("");
+      setIsCategoryModalOpen(false);
+      return;
+    }
+
+    setIsSavingCategory(true);
+
+    const { error } = await supabase.from("event_categories").insert({
+      event_id: selectedEvent.id,
+      name: normalizedName,
+      sort_order: eventCategories.length,
+    });
+
+    setIsSavingCategory(false);
+
+    if (error) {
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      return;
+    }
+
+    setItemCategoryKey(normalizedName);
+    setSelectedCategoryKey(normalizedName);
+    setCategoryName("");
+    setIsCategoryModalOpen(false);
+    await loadEventCategories(selectedEvent.id);
+  };
+
+  const handleCategoryNameBlur = async (
+    category: EventCategory,
+    value: string,
+  ) => {
+    if (!supabase || !session || !selectedEvent) {
+      return;
+    }
+
+    const normalizedName = normalizeCategoryName(value);
+
+    if (
+      !normalizedName ||
+      normalizedName.length > 80 ||
+      normalizedName === category.name
+    ) {
+      return;
+    }
+
+    const hasDuplicateCategory = eventCategories.some(
+      (currentCategory) =>
+        currentCategory.id !== category.id &&
+        currentCategory.name.toLowerCase() === normalizedName.toLowerCase(),
+    );
+
+    if (hasDuplicateCategory) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
+    setErrorMessage("");
+    setIsSavingCategory(true);
+
+    const { error: categoryUpdateError } = await supabase
+      .from("event_categories")
+      .update({ name: normalizedName })
+      .eq("id", category.id)
+      .eq("event_id", selectedEvent.id);
+
+    if (categoryUpdateError) {
+      setIsSavingCategory(false);
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      return;
+    }
+
+    const { error: itemCategoryUpdateError } = await supabase
+      .from("shopping_items")
+      .update({ category: normalizedName })
+      .eq("event_id", selectedEvent.id)
+      .eq("category", category.name);
+
+    setIsSavingCategory(false);
+
+    if (itemCategoryUpdateError) {
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      await loadShoppingItems(selectedEvent.id);
+      await loadEventCategories(selectedEvent.id);
+      return;
+    }
+
+    if (selectedCategoryKey === category.name) {
+      setSelectedCategoryKey(normalizedName);
+    }
+    if (itemCategoryKey === category.name) {
+      setItemCategoryKey(normalizedName);
+    }
+
+    setShoppingItems((currentItems) =>
+      currentItems.map((item) =>
+        item.category === category.name
+          ? { ...item, category: normalizedName }
+          : item,
+      ),
+    );
+    setEventCategories((currentCategories) =>
+      currentCategories.map((currentCategory) =>
+        currentCategory.id === category.id
+          ? { ...currentCategory, name: normalizedName }
+          : currentCategory,
+      ),
+    );
+  };
+
   const handleSaveItem = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setErrorMessage("");
@@ -508,15 +723,23 @@ export function App() {
       return;
     }
 
+    const normalizedCategory =
+      itemCategoryKey === UNCATEGORIZED_CATEGORY_KEY ? null : itemCategoryKey;
+
+    if (
+      normalizedCategory !== null &&
+      (!normalizeCategoryName(normalizedCategory) ||
+        normalizedCategory.length > 80)
+    ) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
     setIsSavingItem(true);
 
     const { error } = await supabase.from("shopping_items").insert({
       name: normalizedName,
-      category:
-        selectedCategoryKey === ALL_CATEGORY_KEY ||
-        selectedCategoryKey === UNCATEGORIZED_CATEGORY_KEY
-          ? null
-          : selectedCategoryKey,
+      category: normalizedCategory,
       event_id: selectedEvent.id,
       is_extra: true,
       sort_order: shoppingItems.length,
@@ -531,6 +754,7 @@ export function App() {
     }
 
     resetItemForm();
+    setItemCategoryKey(normalizedCategory ?? UNCATEGORIZED_CATEGORY_KEY);
     await loadShoppingItems(selectedEvent.id);
   };
 
@@ -588,38 +812,59 @@ export function App() {
 
   const categoryTabs = (() => {
     const categoryKeys = new Set<string>();
-
-    for (const item of shoppingItems) {
-      categoryKeys.add(getItemCategoryKey(item));
-    }
-
-    for (const category of customCategories) {
-      categoryKeys.add(category);
-    }
-
-    categoryKeys.add(UNCATEGORIZED_CATEGORY_KEY);
-
     const tabs: CategoryTab[] = [
       {
         key: ALL_CATEGORY_KEY,
         label: "すべて",
-        isEditable: false,
-        isDeletable: false,
       },
     ];
 
-    for (const categoryKey of categoryKeys) {
-      tabs.push({
-        key: categoryKey,
-        label: getCategoryLabel(categoryKey),
-        isEditable: categoryKey !== ALL_CATEGORY_KEY,
-        isDeletable:
-          categoryKey !== ALL_CATEGORY_KEY &&
-          categoryKey !== UNCATEGORIZED_CATEGORY_KEY,
-      });
+    for (const category of eventCategories) {
+      const normalizedName = normalizeCategoryName(category.name);
+
+      if (normalizedName) {
+        categoryKeys.add(normalizedName);
+        tabs.push({
+          key: normalizedName,
+          label: normalizedName,
+        });
+      }
+    }
+
+    for (const item of shoppingItems) {
+      const itemCategoryKey = getItemCategoryKey(item);
+
+      if (!categoryKeys.has(itemCategoryKey)) {
+        categoryKeys.add(itemCategoryKey);
+        tabs.push({
+          key: itemCategoryKey,
+          label: getCategoryLabel(itemCategoryKey),
+        });
+      }
     }
 
     return tabs;
+  })();
+
+  const itemCategoryOptions = (() => {
+    const categories: CategoryTab[] = [
+      { key: UNCATEGORIZED_CATEGORY_KEY, label: UNCATEGORIZED_CATEGORY_LABEL },
+    ];
+
+    for (const category of eventCategories) {
+      const normalizedName = normalizeCategoryName(category.name);
+
+      if (
+        normalizedName &&
+        !categories.some(
+          (currentCategory) => currentCategory.key === normalizedName,
+        )
+      ) {
+        categories.push({ key: normalizedName, label: normalizedName });
+      }
+    }
+
+    return categories;
   })();
 
   const visibleShoppingItems =
@@ -685,168 +930,6 @@ export function App() {
     }
 
     await saveShoppingItemPatch(item, { name: normalizedName });
-  };
-
-  const handleAddCategory = () => {
-    const categoryNames = new Set<string>();
-
-    for (const category of categoryTabs) {
-      if (category.key !== ALL_CATEGORY_KEY) {
-        categoryNames.add(category.label);
-      }
-    }
-    let nextCategoryName = "新しいカテゴリ";
-    let suffix = 2;
-
-    while (categoryNames.has(nextCategoryName)) {
-      nextCategoryName = `新しいカテゴリ ${suffix}`;
-      suffix += 1;
-    }
-
-    setCustomCategories((currentCategories) => {
-      const nextCategories = [...currentCategories];
-      pushUniqueCategory(nextCategories, nextCategoryName);
-      return nextCategories;
-    });
-    setSelectedCategoryKey(nextCategoryName);
-  };
-
-  const updateCategoryForItems = async (
-    sourceCategoryKey: string,
-    nextCategoryName: string | null,
-  ) => {
-    if (!supabase || !session || !selectedEvent) {
-      return false;
-    }
-
-    const supabaseClient = supabase;
-    const targetItems = shoppingItems.reduce<ShoppingItem[]>((items, item) => {
-      if (getItemCategoryKey(item) === sourceCategoryKey) {
-        items.push(item);
-      }
-
-      return items;
-    }, []);
-
-    if (targetItems.length === 0) {
-      return true;
-    }
-
-    const updateResults = await Promise.all(
-      targetItems.map((item) =>
-        supabaseClient
-          .from("shopping_items")
-          .update({ category: nextCategoryName })
-          .eq("id", item.id)
-          .eq("event_id", selectedEvent.id),
-      ),
-    );
-
-    return updateResults.every((result) => !result.error);
-  };
-
-  const handleCategoryNameBlur = async (
-    categoryKey: string,
-    value: string,
-  ) => {
-    if (categoryKey === ALL_CATEGORY_KEY || !selectedEvent) {
-      return;
-    }
-
-    const nextCategoryName = value.trim();
-
-    if (!nextCategoryName || nextCategoryName.length > 80) {
-      setErrorMessage(VALIDATION_ERROR_MESSAGE);
-      setCategoryDrafts((currentDrafts) => ({
-        ...currentDrafts,
-        [categoryKey]: getCategoryLabel(categoryKey),
-      }));
-      return;
-    }
-
-    if (nextCategoryName === getCategoryLabel(categoryKey)) {
-      setCategoryDrafts((currentDrafts) =>
-        omitRecordKey(currentDrafts, categoryKey),
-      );
-      return;
-    }
-
-    setErrorMessage("");
-
-    const didUpdateItems = await updateCategoryForItems(
-      categoryKey,
-      nextCategoryName,
-    );
-
-    if (!didUpdateItems) {
-      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
-      await loadShoppingItems(selectedEvent.id);
-      return;
-    }
-
-    setShoppingItems((currentItems) =>
-      currentItems.map((item) =>
-        getItemCategoryKey(item) === categoryKey
-          ? { ...item, category: nextCategoryName }
-          : item,
-      ),
-    );
-    setCustomCategories((currentCategories) => {
-      const nextCategories = currentCategories.reduce<string[]>(
-        (categories, category) => {
-          if (category === categoryKey) {
-            pushUniqueCategory(categories, nextCategoryName);
-          } else {
-            pushUniqueCategory(categories, category);
-          }
-
-          return categories;
-        },
-        [],
-      );
-
-      pushUniqueCategory(nextCategories, nextCategoryName);
-
-      return nextCategories;
-    });
-    setSelectedCategoryKey(nextCategoryName);
-    setCategoryDrafts((currentDrafts) => {
-      const nextDrafts = omitRecordKey(currentDrafts, categoryKey);
-      return omitRecordKey(nextDrafts, nextCategoryName);
-    });
-    await loadShoppingItems(selectedEvent.id);
-  };
-
-  const handleDeleteCategory = async (categoryKey: string) => {
-    if (
-      categoryKey === ALL_CATEGORY_KEY ||
-      categoryKey === UNCATEGORIZED_CATEGORY_KEY ||
-      !selectedEvent
-    ) {
-      return;
-    }
-
-    setErrorMessage("");
-
-    const didUpdateItems = await updateCategoryForItems(categoryKey, null);
-
-    if (!didUpdateItems) {
-      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
-      await loadShoppingItems(selectedEvent.id);
-      return;
-    }
-
-    setCustomCategories((currentCategories) =>
-      currentCategories.reduce<string[]>((categories, category) => {
-        if (category !== categoryKey) {
-          categories.push(category);
-        }
-
-        return categories;
-      }, []),
-    );
-    setSelectedCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
-    await loadShoppingItems(selectedEvent.id);
   };
 
   const handleItemQuantityChange = async (item: ShoppingItem, value: string) => {
@@ -1075,8 +1158,16 @@ export function App() {
     }
   };
 
+  const getItemLineTotal = (item: ShoppingItem) => {
+    if (!isItemInCart(item)) {
+      return 0;
+    }
+
+    const quantity = getItemNumericQuantity(item) ?? 1;
+    return (item.actual_price ?? 0) * quantity;
+  };
   const checkedPurchaseTotal = shoppingItems.reduce(
-    (total, item) => total + (isItemInCart(item) ? item.actual_price ?? 0 : 0),
+    (total, item) => total + getItemLineTotal(item),
     0,
   );
   const remainingBudget =
@@ -1328,9 +1419,13 @@ export function App() {
                                 </div>
                                 <div className="report-price">
                                   <strong>
-                                    {formatYen(item.actual_price ?? 0)}
+                                    {formatYen(getItemLineTotal(item))}
                                   </strong>
                                   <span>
+                                    単価 {formatYen(item.actual_price ?? 0)}
+                                    {" / "}
+                                    {getItemQuantityLabel(item)}
+                                    {" / "}
                                     税抜{" "}
                                     {formatYen(getItemTaxExcludedPrice(item) ?? 0)}
                                     {" / "}
@@ -1367,9 +1462,13 @@ export function App() {
                                   {itemHasPrice(item) ? (
                                     <>
                                       <strong>
-                                        {formatYen(item.actual_price ?? 0)}
+                                        {formatYen(getItemLineTotal(item))}
                                       </strong>
                                       <span>
+                                        単価 {formatYen(item.actual_price ?? 0)}
+                                        {" / "}
+                                        {getItemQuantityLabel(item)}
+                                        {" / "}
                                         税抜{" "}
                                         {formatYen(
                                           getItemTaxExcludedPrice(item) ?? 0,
@@ -1396,40 +1495,55 @@ export function App() {
                   </section>
                 ) : (
                   <div className="shopping-layout">
+                  <div className="item-entry-panel">
+                    <button
+                      type="button"
+                      className="category-create-button"
+                      onClick={handleOpenCategoryModal}
+                    >
+                      カテゴリ追加 +
+                    </button>
                   <form className="quick-add-form" onSubmit={handleSaveItem}>
-                    <h2>
-                      商品追加
-                      {selectedCategoryKey !== ALL_CATEGORY_KEY && (
-                        <span className="form-heading-note">
-                          {getCategoryLabel(selectedCategoryKey)}
-                        </span>
-                      )}
-                    </h2>
+                    <h2>商品追加</h2>
                     <label>
                       商品名
-                      <div className="quick-add-row">
-                        <input
-                          type="text"
-                          name="itemName"
-                          value={itemName}
-                          onChange={(formEvent) =>
-                            setItemName(formEvent.target.value)
-                          }
-                          disabled={isSavingItem}
-                          required
-                          maxLength={120}
-                        />
-                        <button
-                          type="submit"
-                          className="add-item-button"
-                          disabled={isSavingItem}
-                          aria-label="商品を追加"
-                        >
-                          +
-                        </button>
-                      </div>
+                      <input
+                        type="text"
+                        name="itemName"
+                        value={itemName}
+                        onChange={(formEvent) =>
+                          setItemName(formEvent.target.value)
+                        }
+                        disabled={isSavingItem}
+                        required
+                        maxLength={120}
+                      />
                     </label>
+                    <label>
+                      カテゴリ
+                      <select
+                        value={itemCategoryKey}
+                        onChange={(formEvent) =>
+                          setItemCategoryKey(formEvent.target.value)
+                        }
+                        disabled={isSavingItem}
+                      >
+                        {itemCategoryOptions.map((category) => (
+                          <option key={category.key} value={category.key}>
+                            {category.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="submit"
+                      className="save-item-button"
+                      disabled={isSavingItem}
+                    >
+                      {isSavingItem ? "保存中" : "保存"}
+                    </button>
                   </form>
+                  </div>
 
                   <section className="item-list-section" aria-labelledby="item-list">
                     <div className="category-tabs" aria-label="カテゴリ">
@@ -1442,66 +1556,19 @@ export function App() {
                           }
                           key={category.key}
                         >
-                          {category.isEditable ? (
-                            <input
-                              type="text"
-                              value={categoryDrafts[category.key] ?? category.label}
-                              onChange={(formEvent) =>
-                                setCategoryDrafts((currentDrafts) => ({
-                                  ...currentDrafts,
-                                  [category.key]: formEvent.target.value,
-                                }))
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCategoryKey(category.key);
+                              if (category.key !== ALL_CATEGORY_KEY) {
+                                setItemCategoryKey(category.key);
                               }
-                              onFocus={() => {
-                                setSelectedCategoryKey(category.key);
-                                setCategoryDrafts((currentDrafts) => ({
-                                  ...currentDrafts,
-                                  [category.key]:
-                                    currentDrafts[category.key] ?? category.label,
-                                }));
-                              }}
-                              onBlur={(formEvent) =>
-                                handleCategoryNameBlur(
-                                  category.key,
-                                  formEvent.target.value,
-                                )
-                              }
-                              onKeyDown={(keyboardEvent) => {
-                                if (keyboardEvent.key === "Enter") {
-                                  keyboardEvent.currentTarget.blur();
-                                }
-                              }}
-                              maxLength={80}
-                              aria-label={`${category.label}カテゴリ名`}
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedCategoryKey(category.key)}
-                            >
-                              {category.label}
-                            </button>
-                          )}
-                          {category.isDeletable && (
-                            <button
-                              type="button"
-                              className="category-delete-button"
-                              onClick={() => handleDeleteCategory(category.key)}
-                              aria-label={`${category.label}カテゴリを削除`}
-                            >
-                              ×
-                            </button>
-                          )}
+                            }}
+                          >
+                            {category.label}
+                          </button>
                         </div>
                       ))}
-                      <button
-                        type="button"
-                        className="category-add-button"
-                        onClick={handleAddCategory}
-                        aria-label="カテゴリを追加"
-                      >
-                        +
-                      </button>
                     </div>
                     <div className="section-header">
                       <h2 id="item-list">買い物リスト</h2>
@@ -1766,6 +1833,98 @@ export function App() {
                   </div>
                 )}
               </section>
+            )}
+
+            {isCategoryModalOpen && selectedEvent && (
+              <div
+                className="modal-backdrop"
+                onClick={handleCloseCategoryModal}
+                role="presentation"
+              >
+                <div
+                  className="modal-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="create-category-title"
+                  onClick={(modalEvent) => modalEvent.stopPropagation()}
+                >
+                  <header className="modal-header">
+                    <h2 id="create-category-title">カテゴリ管理</h2>
+                    <button
+                      type="button"
+                      className="modal-close"
+                      onClick={handleCloseCategoryModal}
+                      aria-label="閉じる"
+                      disabled={isSavingCategory}
+                    >
+                      ×
+                    </button>
+                  </header>
+                  <form className="event-form" onSubmit={handleCreateCategory}>
+                    <label>
+                      カテゴリ名
+                      <input
+                        type="text"
+                        value={categoryName}
+                        onChange={(formEvent) =>
+                          setCategoryName(formEvent.target.value)
+                        }
+                        disabled={isSavingCategory}
+                        required
+                        maxLength={80}
+                        autoFocus
+                      />
+                    </label>
+                    {errorMessage && (
+                      <p className="error-message" role="alert">
+                        {errorMessage}
+                      </p>
+                    )}
+                    <div className="modal-form-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCloseCategoryModal}
+                        disabled={isSavingCategory}
+                      >
+                        キャンセル
+                      </button>
+                      <button type="submit" disabled={isSavingCategory}>
+                        {isSavingCategory ? "保存中" : "保存"}
+                      </button>
+                    </div>
+                  </form>
+                  {eventCategories.length > 0 && (
+                    <div className="category-edit-list">
+                      <p className="section-lead">既存カテゴリ名の編集</p>
+                      <ul>
+                        {eventCategories.map((category) => (
+                          <li key={category.id}>
+                            <input
+                              type="text"
+                              defaultValue={category.name}
+                              onBlur={(formEvent) =>
+                                handleCategoryNameBlur(
+                                  category,
+                                  formEvent.target.value,
+                                )
+                              }
+                              onKeyDown={(keyboardEvent) => {
+                                if (keyboardEvent.key === "Enter") {
+                                  keyboardEvent.currentTarget.blur();
+                                }
+                              }}
+                              disabled={isSavingCategory}
+                              maxLength={80}
+                              aria-label={`${category.name}のカテゴリ名`}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
 
             {isCreateEventOpen && (
