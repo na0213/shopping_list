@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type DragEvent, type FormEvent, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   DEFAULT_TAX_RATE,
@@ -117,6 +117,7 @@ export function App() {
   const [eventViewMode, setEventViewMode] =
     useState<EventViewMode>("shopping");
   const [isCompletingEvent, setIsCompletingEvent] = useState(false);
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
 
   const selectedEvent =
     events.find((bbqEvent) => bbqEvent.id === selectedEventId) ?? null;
@@ -486,10 +487,12 @@ export function App() {
     itemPayload: Partial<
       Pick<
         ShoppingItem,
+        | "name"
         | "actual_price"
         | "actual_price_excluding_tax"
         | "actual_quantity"
         | "is_checked"
+        | "sort_order"
         | "tax_rate"
       >
     >,
@@ -565,6 +568,21 @@ export function App() {
     isChecked: boolean,
   ) => {
     await saveShoppingItemPatch(item, { is_checked: isChecked });
+  };
+
+  const handleItemNameBlur = async (item: ShoppingItem, value: string) => {
+    const normalizedName = value.trim();
+
+    if (!normalizedName) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
+    if (normalizedName === item.name) {
+      return;
+    }
+
+    await saveShoppingItemPatch(item, { name: normalizedName });
   };
 
   const handleItemQuantityChange = async (item: ShoppingItem, value: string) => {
@@ -687,6 +705,85 @@ export function App() {
     }
 
     await loadShoppingItems(selectedEvent.id);
+  };
+
+  const handleItemDragStart = (
+    event: DragEvent<HTMLButtonElement>,
+    itemId: string,
+  ) => {
+    setDraggedItemId(itemId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", itemId);
+  };
+
+  const handleItemDragOver = (event: DragEvent<HTMLLIElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleItemDrop = async (
+    event: DragEvent<HTMLLIElement>,
+    targetItemId: string,
+  ) => {
+    event.preventDefault();
+
+    if (!supabase || !session || !selectedEvent) {
+      setDraggedItemId(null);
+      return;
+    }
+
+    const supabaseClient = supabase;
+    const sourceItemId =
+      draggedItemId || event.dataTransfer.getData("text/plain");
+
+    if (!sourceItemId || sourceItemId === targetItemId) {
+      setDraggedItemId(null);
+      return;
+    }
+
+    const sourceIndex = shoppingItems.findIndex(
+      (item) => item.id === sourceItemId,
+    );
+    const targetIndex = shoppingItems.findIndex(
+      (item) => item.id === targetItemId,
+    );
+
+    if (sourceIndex < 0 || targetIndex < 0) {
+      setDraggedItemId(null);
+      return;
+    }
+
+    const nextItems = [...shoppingItems];
+    const [movedItem] = nextItems.splice(sourceIndex, 1);
+    nextItems.splice(targetIndex, 0, movedItem);
+
+    const reorderedItems = nextItems.map((item, index) => ({
+      ...item,
+      sort_order: index,
+    }));
+
+    setDraggedItemId(null);
+    setErrorMessage("");
+    setShoppingItems(reorderedItems);
+
+    const updateResults = await Promise.all(
+      reorderedItems.map((item) =>
+        supabaseClient
+          .from("shopping_items")
+          .update({ sort_order: item.sort_order })
+          .eq("id", item.id)
+          .eq("event_id", selectedEvent.id),
+      ),
+    );
+
+    if (updateResults.some((result) => result.error)) {
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      await loadShoppingItems(selectedEvent.id);
+    }
+  };
+
+  const handleItemDragEnd = () => {
+    setDraggedItemId(null);
   };
 
   const handleCompleteEvent = async () => {
@@ -1064,11 +1161,19 @@ export function App() {
                         {shoppingItems.map((item) => (
                           <li
                             className={
-                              item.is_checked
-                                ? "shopping-item is-checked"
-                                : "shopping-item"
+                              [
+                                "shopping-item",
+                                item.is_checked ? "is-checked" : "",
+                                draggedItemId === item.id ? "is-dragging" : "",
+                              ]
+                                .join(" ")
+                                .trim()
                             }
                             key={item.id}
+                            onDragOver={handleItemDragOver}
+                            onDrop={(dragEvent) =>
+                              handleItemDrop(dragEvent, item.id)
+                            }
                           >
                             <button
                               type="button"
@@ -1080,20 +1185,52 @@ export function App() {
                               ×
                             </button>
                             <div className="shopping-item-main">
-                              <label className="item-title-row">
-                                <input
-                                  type="checkbox"
-                                  checked={item.is_checked}
-                                  onChange={(formEvent) =>
-                                    handleItemCheckedChange(
-                                      item,
-                                      formEvent.target.checked,
-                                    )
+                              <div className="item-heading-row">
+                                <button
+                                  type="button"
+                                  className="drag-handle-button"
+                                  draggable
+                                  onDragStart={(dragEvent) =>
+                                    handleItemDragStart(dragEvent, item.id)
                                   }
-                                  aria-label={`${item.name}を購入済みにする`}
-                                />
-                                <h3>{item.name}</h3>
-                              </label>
+                                  onDragEnd={handleItemDragEnd}
+                                  aria-label={`${item.name}の表示順を移動`}
+                                  title="ドラッグして並び替え"
+                                >
+                                  ⋮⋮
+                                </button>
+                                <div className="item-title-row">
+                                  <input
+                                    type="checkbox"
+                                    checked={item.is_checked}
+                                    onChange={(formEvent) =>
+                                      handleItemCheckedChange(
+                                        item,
+                                        formEvent.target.checked,
+                                      )
+                                    }
+                                    aria-label={`${item.name}を購入済みにする`}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="item-name-input"
+                                    defaultValue={item.name}
+                                    onBlur={(formEvent) =>
+                                      handleItemNameBlur(
+                                        item,
+                                        formEvent.target.value,
+                                      )
+                                    }
+                                    onKeyDown={(keyboardEvent) => {
+                                      if (keyboardEvent.key === "Enter") {
+                                        keyboardEvent.currentTarget.blur();
+                                      }
+                                    }}
+                                    maxLength={120}
+                                    aria-label={`${item.name}の商品名`}
+                                  />
+                                </div>
+                              </div>
                               <div className="inline-item-inputs">
                                 <label className="item-field">
                                   数量

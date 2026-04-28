@@ -506,7 +506,13 @@ textarea:disabled {
   background: #fffdf8;
   transition:
     background 0.15s ease,
-    border-color 0.15s ease;
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.shopping-item.is-dragging {
+  border-color: #255c43;
+  opacity: 0.58;
 }
 
 .shopping-item.is-checked {
@@ -514,7 +520,7 @@ textarea:disabled {
   background: #f0f5ec;
 }
 
-.shopping-item.is-checked .item-title-row h3 {
+.shopping-item.is-checked .item-name-input {
   color: #5b6b4a;
   text-decoration: line-through;
   text-decoration-thickness: 2px;
@@ -565,6 +571,33 @@ textarea:disabled {
   line-height: 1;
 }
 
+.item-heading-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.drag-handle-button {
+  display: grid;
+  width: 32px;
+  min-height: 32px;
+  place-items: center;
+  border: 1px solid #c7c0b1;
+  border-radius: 8px;
+  padding: 0;
+  background: #fffdf8;
+  color: #5b6b4a;
+  cursor: grab;
+  font-size: 1rem;
+  line-height: 1;
+  touch-action: none;
+}
+
+.drag-handle-button:active {
+  cursor: grabbing;
+}
+
 .item-title-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -572,7 +605,6 @@ textarea:disabled {
   align-items: center;
   margin: -4px 0;
   padding: 4px 0;
-  cursor: pointer;
   font-weight: 700;
 }
 
@@ -585,8 +617,21 @@ textarea:disabled {
   cursor: pointer;
 }
 
-.item-title-row h3 {
-  margin: 0;
+.item-name-input {
+  min-height: 36px;
+  border-color: transparent;
+  padding: 4px 6px;
+  background: transparent;
+  color: #18201a;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.item-name-input:hover,
+.item-name-input:focus {
+  border-color: #c7c0b1;
+  background: #fffdf8;
 }
 
 .inline-item-inputs {
