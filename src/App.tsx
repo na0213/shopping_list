@@ -9,6 +9,7 @@ import {
   type TaxRate,
 } from "./lib/tax";
 import { supabase } from "./lib/supabase";
+import ebiIcon from "./icon/ebi.png";
 
 const LOGIN_ERROR_MESSAGE = "ログインできませんでした";
 const FETCH_EVENTS_ERROR_MESSAGE = "データの取得に失敗しました";
@@ -755,7 +756,10 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 id="app-title">BBQ 買い出し支援</h1>
+        <div className="app-brand">
+          <img src={ebiIcon} alt="" className="brand-icon" aria-hidden="true" />
+          <h1 id="app-title">お買い物リスト</h1>
+        </div>
         {session && (
           <div className="menu-wrap">
             <button
@@ -964,9 +968,10 @@ export function App() {
                             ))}
                           </ul>
                         ) : (
-                          <p className="status-message">
-                            購入済み商品はありません。
-                          </p>
+                          <div className="empty-state compact-empty">
+                            <img src={ebiIcon} alt="" aria-hidden="true" />
+                            <p>購入済み商品はありません。</p>
+                          </div>
                         )}
                       </section>
 
@@ -1008,9 +1013,10 @@ export function App() {
                             ))}
                           </ul>
                         ) : (
-                          <p className="status-message">
-                            未購入商品はありません。
-                          </p>
+                          <div className="empty-state compact-empty">
+                            <img src={ebiIcon} alt="" aria-hidden="true" />
+                            <p>未購入商品はありません。</p>
+                          </div>
                         )}
                       </section>
                     </div>
@@ -1178,9 +1184,10 @@ export function App() {
                         ))}
                       </ul>
                     ) : (
-                      <p className="status-message">
-                        商品はまだ登録されていません。
-                      </p>
+                      <div className="empty-state">
+                        <img src={ebiIcon} alt="" aria-hidden="true" />
+                        <p>商品はまだ登録されていません。</p>
+                      </div>
                     )}
                   </section>
                 </div>
@@ -1226,9 +1233,12 @@ export function App() {
                     ))}
                   </ul>
                 ) : (
-                  <p className="status-message">
-                    表示できるイベントはありません。メニューから新規イベントを作成してください。
-                  </p>
+                  <div className="empty-state">
+                    <img src={ebiIcon} alt="" aria-hidden="true" />
+                    <p>
+                      表示できるイベントはありません。メニューから新規イベントを作成してください。
+                    </p>
+                  </div>
                 )}
               </section>
             )}
@@ -1344,6 +1354,12 @@ export function App() {
           </>
         ) : (
           <div className="auth-wrapper">
+            <img
+              src={ebiIcon}
+              alt=""
+              className="auth-icon"
+              aria-hidden="true"
+            />
             <p className="lead">ID とパスワードを入力してください。</p>
 
             <form className="login-form" onSubmit={handleLogin}>
