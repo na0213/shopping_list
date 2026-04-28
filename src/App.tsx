@@ -17,6 +17,9 @@ const SAVE_EVENT_ERROR_MESSAGE = "保存に失敗しました";
 const FETCH_ITEMS_ERROR_MESSAGE = "データの取得に失敗しました";
 const SAVE_ITEM_ERROR_MESSAGE = "保存に失敗しました";
 const VALIDATION_ERROR_MESSAGE = "入力内容を確認してください";
+const ALL_CATEGORY_KEY = "__all__";
+const UNCATEGORIZED_CATEGORY_KEY = "__uncategorized__";
+const UNCATEGORIZED_CATEGORY_LABEL = "未分類";
 
 type EventViewMode = "shopping" | "report";
 
@@ -54,6 +57,13 @@ type ShoppingItem = {
 
 type PriceInputMode = "taxIncluded" | "taxExcluded";
 
+type CategoryTab = {
+  key: string;
+  label: string;
+  isEditable: boolean;
+  isDeletable: boolean;
+};
+
 const eventSelectColumns =
   "id,name,year,budget,note,status,created_at,updated_at";
 const shoppingItemSelectColumns =
@@ -84,6 +94,17 @@ const parseOptionalInteger = (value: string) => {
 
   const parsedValue = Number(value);
   return Number.isInteger(parsedValue) && parsedValue >= 0 ? parsedValue : null;
+};
+
+const normalizeCategoryName = (categoryName: string | null) => {
+  const normalizedName = categoryName?.trim() ?? "";
+  return normalizedName || null;
+};
+
+const pushUniqueCategory = (categories: string[], categoryName: string) => {
+  if (!categories.includes(categoryName)) {
+    categories.push(categoryName);
+  }
 };
 
 export function App() {
@@ -118,6 +139,9 @@ export function App() {
     useState<EventViewMode>("shopping");
   const [isCompletingEvent, setIsCompletingEvent] = useState(false);
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
+  const [selectedCategoryKey, setSelectedCategoryKey] =
+    useState(ALL_CATEGORY_KEY);
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
 
   const selectedEvent =
     events.find((bbqEvent) => bbqEvent.id === selectedEventId) ?? null;
@@ -146,6 +170,8 @@ export function App() {
         setSelectedEventId(null);
         setShoppingItems([]);
         setPriceInputModes({});
+        setSelectedCategoryKey(ALL_CATEGORY_KEY);
+        setCustomCategories([]);
       }
       setIsCheckingSession(false);
     });
@@ -218,9 +244,13 @@ export function App() {
   useEffect(() => {
     if (!selectedEvent) {
       setShoppingItems([]);
+      setSelectedCategoryKey(ALL_CATEGORY_KEY);
+      setCustomCategories([]);
       return;
     }
 
+    setSelectedCategoryKey(ALL_CATEGORY_KEY);
+    setCustomCategories([]);
     void loadShoppingItems(selectedEvent.id);
   }, [selectedEvent?.id]);
 
@@ -465,6 +495,11 @@ export function App() {
 
     const { error } = await supabase.from("shopping_items").insert({
       name: normalizedName,
+      category:
+        selectedCategoryKey === ALL_CATEGORY_KEY ||
+        selectedCategoryKey === UNCATEGORIZED_CATEGORY_KEY
+          ? null
+          : selectedCategoryKey,
       event_id: selectedEvent.id,
       is_extra: true,
       sort_order: shoppingItems.length,
@@ -488,6 +523,7 @@ export function App() {
       Pick<
         ShoppingItem,
         | "name"
+        | "category"
         | "actual_price"
         | "actual_price_excluding_tax"
         | "actual_quantity"
@@ -525,6 +561,61 @@ export function App() {
   const getItemTaxRate = (item: ShoppingItem) =>
     isTaxRate(item.tax_rate) ? item.tax_rate : DEFAULT_TAX_RATE;
 
+  const getItemCategoryKey = (item: ShoppingItem) =>
+    normalizeCategoryName(item.category) ?? UNCATEGORIZED_CATEGORY_KEY;
+
+  const getCategoryLabel = (categoryKey: string) =>
+    categoryKey === UNCATEGORIZED_CATEGORY_KEY
+      ? UNCATEGORIZED_CATEGORY_LABEL
+      : categoryKey;
+
+  const categoryTabs = (() => {
+    const categoryKeys = new Set<string>();
+
+    for (const item of shoppingItems) {
+      categoryKeys.add(getItemCategoryKey(item));
+    }
+
+    for (const category of customCategories) {
+      categoryKeys.add(category);
+    }
+
+    categoryKeys.add(UNCATEGORIZED_CATEGORY_KEY);
+
+    const tabs: CategoryTab[] = [
+      {
+        key: ALL_CATEGORY_KEY,
+        label: "すべて",
+        isEditable: false,
+        isDeletable: false,
+      },
+    ];
+
+    for (const categoryKey of categoryKeys) {
+      tabs.push({
+        key: categoryKey,
+        label: getCategoryLabel(categoryKey),
+        isEditable: categoryKey !== ALL_CATEGORY_KEY,
+        isDeletable:
+          categoryKey !== ALL_CATEGORY_KEY &&
+          categoryKey !== UNCATEGORIZED_CATEGORY_KEY,
+      });
+    }
+
+    return tabs;
+  })();
+
+  const visibleShoppingItems =
+    selectedCategoryKey === ALL_CATEGORY_KEY
+      ? shoppingItems
+      : shoppingItems.reduce<ShoppingItem[]>((items, item) => {
+          if (getItemCategoryKey(item) === selectedCategoryKey) {
+            items.push(item);
+          }
+
+          return items;
+        }, []);
+
   const getItemPriceInputMode = (item: ShoppingItem) =>
     priceInputModes[item.id] ?? "taxIncluded";
 
@@ -537,11 +628,12 @@ export function App() {
   const itemHasPrice = (item: ShoppingItem) =>
     item.actual_price !== null || item.actual_price_excluding_tax !== null;
 
+  const isItemInCart = (item: ShoppingItem) => itemHasPrice(item);
+
   const shouldAutoCheckItem = (
-    quantity: number | null,
     taxIncludedPrice: number | null,
     taxExcludedPrice: number | null,
-  ) => quantity !== null && (taxIncludedPrice !== null || taxExcludedPrice !== null);
+  ) => taxIncludedPrice !== null || taxExcludedPrice !== null;
 
   const getItemPriceInputValue = (item: ShoppingItem) => {
     const inputMode = getItemPriceInputMode(item);
@@ -563,13 +655,6 @@ export function App() {
     return `税抜 ${formatYen(item.actual_price_excluding_tax ?? 0)}`;
   };
 
-  const handleItemCheckedChange = async (
-    item: ShoppingItem,
-    isChecked: boolean,
-  ) => {
-    await saveShoppingItemPatch(item, { is_checked: isChecked });
-  };
-
   const handleItemNameBlur = async (item: ShoppingItem, value: string) => {
     const normalizedName = value.trim();
 
@@ -585,6 +670,157 @@ export function App() {
     await saveShoppingItemPatch(item, { name: normalizedName });
   };
 
+  const handleAddCategory = () => {
+    const categoryNames = new Set<string>();
+
+    for (const category of categoryTabs) {
+      if (category.key !== ALL_CATEGORY_KEY) {
+        categoryNames.add(category.label);
+      }
+    }
+    let nextCategoryName = "新しいカテゴリ";
+    let suffix = 2;
+
+    while (categoryNames.has(nextCategoryName)) {
+      nextCategoryName = `新しいカテゴリ ${suffix}`;
+      suffix += 1;
+    }
+
+    setCustomCategories((currentCategories) => {
+      const nextCategories = [...currentCategories];
+      pushUniqueCategory(nextCategories, nextCategoryName);
+      return nextCategories;
+    });
+    setSelectedCategoryKey(nextCategoryName);
+  };
+
+  const updateCategoryForItems = async (
+    sourceCategoryKey: string,
+    nextCategoryName: string | null,
+  ) => {
+    if (!supabase || !session || !selectedEvent) {
+      return false;
+    }
+
+    const supabaseClient = supabase;
+    const targetItems = shoppingItems.reduce<ShoppingItem[]>((items, item) => {
+      if (getItemCategoryKey(item) === sourceCategoryKey) {
+        items.push(item);
+      }
+
+      return items;
+    }, []);
+
+    if (targetItems.length === 0) {
+      return true;
+    }
+
+    const updateResults = await Promise.all(
+      targetItems.map((item) =>
+        supabaseClient
+          .from("shopping_items")
+          .update({ category: nextCategoryName })
+          .eq("id", item.id)
+          .eq("event_id", selectedEvent.id),
+      ),
+    );
+
+    return updateResults.every((result) => !result.error);
+  };
+
+  const handleCategoryNameBlur = async (
+    categoryKey: string,
+    value: string,
+  ) => {
+    if (categoryKey === ALL_CATEGORY_KEY || !selectedEvent) {
+      return;
+    }
+
+    const nextCategoryName = value.trim();
+
+    if (!nextCategoryName || nextCategoryName.length > 80) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
+    if (nextCategoryName === getCategoryLabel(categoryKey)) {
+      return;
+    }
+
+    setErrorMessage("");
+
+    const didUpdateItems = await updateCategoryForItems(
+      categoryKey,
+      nextCategoryName,
+    );
+
+    if (!didUpdateItems) {
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      await loadShoppingItems(selectedEvent.id);
+      return;
+    }
+
+    setShoppingItems((currentItems) =>
+      currentItems.map((item) =>
+        getItemCategoryKey(item) === categoryKey
+          ? { ...item, category: nextCategoryName }
+          : item,
+      ),
+    );
+    setCustomCategories((currentCategories) => {
+      const nextCategories = currentCategories.reduce<string[]>(
+        (categories, category) => {
+          if (category === categoryKey) {
+            pushUniqueCategory(categories, nextCategoryName);
+          } else {
+            pushUniqueCategory(categories, category);
+          }
+
+          return categories;
+        },
+        [],
+      );
+
+      pushUniqueCategory(nextCategories, nextCategoryName);
+
+      return nextCategories;
+    });
+    setSelectedCategoryKey(nextCategoryName);
+    await loadShoppingItems(selectedEvent.id);
+  };
+
+  const handleDeleteCategory = async (categoryKey: string) => {
+    if (
+      categoryKey === ALL_CATEGORY_KEY ||
+      categoryKey === UNCATEGORIZED_CATEGORY_KEY ||
+      !selectedEvent
+    ) {
+      return;
+    }
+
+    setErrorMessage("");
+
+    const didUpdateItems = await updateCategoryForItems(categoryKey, null);
+
+    if (!didUpdateItems) {
+      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+      await loadShoppingItems(selectedEvent.id);
+      return;
+    }
+
+    setCustomCategories((currentCategories) =>
+      currentCategories.reduce<string[]>((categories, category) => {
+        if (category !== categoryKey) {
+          categories.push(category);
+        }
+
+        return categories;
+      }, []),
+    );
+    setSelectedCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
+    await loadShoppingItems(selectedEvent.id);
+  };
+
   const handleItemQuantityChange = async (item: ShoppingItem, value: string) => {
     const actualQuantity = parseOptionalNumber(value);
     const hasInvalidQuantity = value.trim() && actualQuantity === null;
@@ -597,7 +833,6 @@ export function App() {
     await saveShoppingItemPatch(item, {
       actual_quantity: actualQuantity,
       is_checked: shouldAutoCheckItem(
-        actualQuantity,
         item.actual_price,
         item.actual_price_excluding_tax,
       ),
@@ -643,11 +878,7 @@ export function App() {
     await saveShoppingItemPatch(item, {
       actual_price_excluding_tax: actualPriceExcludingTax,
       actual_price: actualPrice,
-      is_checked: shouldAutoCheckItem(
-        getItemNumericQuantity(item),
-        actualPrice,
-        actualPriceExcludingTax,
-      ),
+      is_checked: shouldAutoCheckItem(actualPrice, actualPriceExcludingTax),
     });
   };
 
@@ -676,7 +907,6 @@ export function App() {
     await saveShoppingItemPatch(item, {
       ...itemPayload,
       is_checked: shouldAutoCheckItem(
-        getItemNumericQuantity(item),
         itemPayload.actual_price ?? item.actual_price,
         itemPayload.actual_price_excluding_tax ?? item.actual_price_excluding_tax,
       ),
@@ -818,14 +1048,14 @@ export function App() {
   };
 
   const checkedPurchaseTotal = shoppingItems.reduce(
-    (total, item) => total + (item.is_checked ? item.actual_price ?? 0 : 0),
+    (total, item) => total + (isItemInCart(item) ? item.actual_price ?? 0 : 0),
     0,
   );
   const remainingBudget =
     selectedEvent === null ? 0 : selectedEvent.budget - checkedPurchaseTotal;
   const reportItemGroups = shoppingItems.reduce(
     (groups, item) => {
-      if (item.is_checked) {
+      if (isItemInCart(item)) {
         groups.purchased.push(item);
       } else {
         groups.unpurchased.push(item);
@@ -1121,7 +1351,14 @@ export function App() {
                 ) : (
                   <div className="shopping-layout">
                   <form className="quick-add-form" onSubmit={handleSaveItem}>
-                    <h2>商品追加</h2>
+                    <h2>
+                      商品追加
+                      {selectedCategoryKey !== ALL_CATEGORY_KEY && (
+                        <span className="form-heading-note">
+                          {getCategoryLabel(selectedCategoryKey)}
+                        </span>
+                      )}
+                    </h2>
                     <label>
                       商品名
                       <div className="quick-add-row">
@@ -1149,6 +1386,64 @@ export function App() {
                   </form>
 
                   <section className="item-list-section" aria-labelledby="item-list">
+                    <div className="category-tabs" aria-label="カテゴリ">
+                      {categoryTabs.map((category) => (
+                        <div
+                          className={
+                            selectedCategoryKey === category.key
+                              ? "category-tab active"
+                              : "category-tab"
+                          }
+                          key={category.key}
+                        >
+                          {category.isEditable ? (
+                            <input
+                              type="text"
+                              defaultValue={category.label}
+                              onFocus={() => setSelectedCategoryKey(category.key)}
+                              onBlur={(formEvent) =>
+                                handleCategoryNameBlur(
+                                  category.key,
+                                  formEvent.target.value,
+                                )
+                              }
+                              onKeyDown={(keyboardEvent) => {
+                                if (keyboardEvent.key === "Enter") {
+                                  keyboardEvent.currentTarget.blur();
+                                }
+                              }}
+                              maxLength={80}
+                              aria-label={`${category.label}カテゴリ名`}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCategoryKey(category.key)}
+                            >
+                              {category.label}
+                            </button>
+                          )}
+                          {category.isDeletable && (
+                            <button
+                              type="button"
+                              className="category-delete-button"
+                              onClick={() => handleDeleteCategory(category.key)}
+                              aria-label={`${category.label}カテゴリを削除`}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="category-add-button"
+                        onClick={handleAddCategory}
+                        aria-label="カテゴリを追加"
+                      >
+                        +
+                      </button>
+                    </div>
                     <div className="section-header">
                       <h2 id="item-list">買い物リスト</h2>
                     </div>
@@ -1156,14 +1451,14 @@ export function App() {
                       <p className="status-message" role="status">
                         データを取得しています。
                       </p>
-                    ) : shoppingItems.length > 0 ? (
+                    ) : visibleShoppingItems.length > 0 ? (
                       <ul className="item-list">
-                        {shoppingItems.map((item) => (
+                        {visibleShoppingItems.map((item) => (
                           <li
                             className={
                               [
                                 "shopping-item",
-                                item.is_checked ? "is-checked" : "",
+                                isItemInCart(item) ? "is-checked" : "",
                                 draggedItemId === item.id ? "is-dragging" : "",
                               ]
                                 .join(" ")
@@ -1200,17 +1495,51 @@ export function App() {
                                   ⋮⋮
                                 </button>
                                 <div className="item-title-row">
-                                  <input
-                                    type="checkbox"
-                                    checked={item.is_checked}
-                                    onChange={(formEvent) =>
-                                      handleItemCheckedChange(
-                                        item,
-                                        formEvent.target.checked,
-                                      )
+                                  <span
+                                    className={
+                                      isItemInCart(item)
+                                        ? "cart-status-icon is-checked"
+                                        : "cart-status-icon"
                                     }
-                                    aria-label={`${item.name}を購入済みにする`}
-                                  />
+                                    role="img"
+                                    aria-label={
+                                      isItemInCart(item)
+                                        ? `${item.name}はカゴに入っています`
+                                        : `${item.name}は未購入です`
+                                    }
+                                  >
+                                    <svg
+                                      viewBox="0 0 28 28"
+                                      aria-hidden="true"
+                                      focusable="false"
+                                    >
+                                      <path
+                                        className="cart-body"
+                                        d="M4.4 5.6h3.2l2.4 11.2h10.2l2.2-8.1H9.1"
+                                      />
+                                      <path
+                                        className="cart-handle"
+                                        d="M10.4 20.8h10.1"
+                                      />
+                                      <circle
+                                        className="cart-wheel"
+                                        cx="11.3"
+                                        cy="23"
+                                        r="1.6"
+                                      />
+                                      <circle
+                                        className="cart-wheel"
+                                        cx="20.1"
+                                        cy="23"
+                                        r="1.6"
+                                      />
+                                    </svg>
+                                    {isItemInCart(item) && (
+                                      <span className="cart-check-mark">
+                                        ✓
+                                      </span>
+                                    )}
+                                  </span>
                                   <input
                                     type="text"
                                     className="item-name-input"

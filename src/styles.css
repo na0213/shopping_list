@@ -371,6 +371,13 @@ p {
   align-items: end;
 }
 
+.form-heading-note {
+  display: block;
+  margin-top: 4px;
+  color: #5b6b4a;
+  font-size: 0.86rem;
+}
+
 .add-item-button {
   display: grid;
   min-height: 44px;
@@ -482,6 +489,80 @@ textarea:disabled {
   padding: 0;
   margin: 0;
   list-style: none;
+}
+
+.category-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  overflow-x: auto;
+  border-bottom: 2px solid #255c43;
+  padding: 0 2px;
+}
+
+.category-tab {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) auto;
+  align-items: center;
+  min-height: 38px;
+  border: 1px solid #c7c0b1;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: #efe6ca;
+}
+
+.category-tab.active {
+  background: #fffdf8;
+  border-color: #255c43;
+}
+
+.category-tab button,
+.category-tab input,
+.category-add-button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: #255c43;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.category-tab button,
+.category-tab input {
+  width: 100%;
+  min-width: 64px;
+  max-width: 150px;
+  padding: 7px 10px;
+  text-align: center;
+}
+
+.category-tab input {
+  border: 1px solid transparent;
+}
+
+.category-tab input:focus {
+  border-color: #255c43;
+  background: #ffffff;
+  outline: none;
+}
+
+.category-delete-button {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  color: #9b1c1c;
+}
+
+.category-add-button {
+  display: grid;
+  width: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #c7c0b1;
+  border-bottom: 0;
+  background: #fffdf8;
+  font-size: 1.2rem;
 }
 
 .event-item {
@@ -608,13 +689,57 @@ textarea:disabled {
   font-weight: 700;
 }
 
-.item-title-row input[type="checkbox"] {
-  width: 28px;
-  min-height: 28px;
-  margin: 0;
-  padding: 0;
-  accent-color: #255c43;
-  cursor: pointer;
+.cart-status-icon {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #c7c0b1;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #7b715e;
+}
+
+.cart-status-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.cart-body,
+.cart-handle {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
+.cart-wheel {
+  fill: currentColor;
+}
+
+.cart-status-icon.is-checked {
+  border-color: #255c43;
+  background: #e8f0df;
+  color: #255c43;
+}
+
+.cart-check-mark {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 2px solid #fffdf8;
+  border-radius: 999px;
+  background: #255c43;
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .item-name-input {
