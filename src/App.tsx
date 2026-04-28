@@ -116,7 +116,7 @@ export function App() {
   const isSupabaseConfigured = Boolean(supabase);
   const [session, setSession] = useState<Session | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
-  const [loginId, setLoginId] = useState("");
+  const [loginId, setLoginId] = useState("bbq");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);

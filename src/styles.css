@@ -767,6 +767,11 @@ textarea:disabled {
 
 .item-field input {
   min-height: 42px;
+  font-size: 16px;
+}
+
+.item-field select {
+  font-size: 16px;
 }
 
 .inline-tax-rate {
