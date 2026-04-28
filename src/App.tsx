@@ -1,4 +1,4 @@
-import { type DragEvent, type FormEvent, useEffect, useState } from "react";
+import { type DragEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   DEFAULT_TAX_RATE,
@@ -17,6 +17,8 @@ const FETCH_EVENTS_ERROR_MESSAGE = "データの取得に失敗しました";
 const SAVE_EVENT_ERROR_MESSAGE = "保存に失敗しました";
 const FETCH_ITEMS_ERROR_MESSAGE = "データの取得に失敗しました";
 const SAVE_ITEM_ERROR_MESSAGE = "保存に失敗しました";
+const ITEM_CONFLICT_ERROR_MESSAGE =
+  "他の端末の更新と競合したため最新状態を再読込しました";
 const VALIDATION_ERROR_MESSAGE = "入力内容を確認してください";
 const ALL_CATEGORY_KEY = "__all__";
 const UNCATEGORIZED_CATEGORY_KEY = "__uncategorized__";
@@ -72,6 +74,8 @@ type CategoryTab = {
   key: string;
   label: string;
 };
+
+type ItemHighlightField = "name" | "quantity" | "price" | "taxRate";
 
 const eventSelectColumns =
   "id,name,year,budget,note,status,created_at,updated_at";
@@ -152,9 +156,107 @@ export function App() {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [categoryName, setCategoryName] = useState("");
   const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [highlightedItemFields, setHighlightedItemFields] = useState<
+    Record<string, Partial<Record<ItemHighlightField, boolean>>>
+  >({});
+  const highlightTimeoutRef = useRef<Record<string, number>>({});
+  const shoppingItemsRef = useRef<ShoppingItem[]>([]);
+  const itemSaveQueueRef = useRef<Record<string, Promise<void>>>({});
 
   const selectedEvent =
     events.find((bbqEvent) => bbqEvent.id === selectedEventId) ?? null;
+
+  useEffect(() => {
+    shoppingItemsRef.current = shoppingItems;
+  }, [shoppingItems]);
+
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of Object.values(highlightTimeoutRef.current)) {
+        window.clearTimeout(timeoutId);
+      }
+      highlightTimeoutRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    setHighlightedItemFields({});
+  }, [selectedEvent?.id]);
+
+  const highlightItemField = (itemId: string, field: ItemHighlightField) => {
+    const timeoutKey = `${itemId}:${field}`;
+    const existingTimeoutId = highlightTimeoutRef.current[timeoutKey];
+
+    if (existingTimeoutId) {
+      window.clearTimeout(existingTimeoutId);
+    }
+
+    setHighlightedItemFields((current) => ({
+      ...current,
+      [itemId]: {
+        ...current[itemId],
+        [field]: true,
+      },
+    }));
+
+    highlightTimeoutRef.current[timeoutKey] = window.setTimeout(() => {
+      setHighlightedItemFields((current) => {
+        const itemHighlights = current[itemId];
+
+        if (!itemHighlights || !itemHighlights[field]) {
+          return current;
+        }
+
+        const nextItemHighlights = { ...itemHighlights };
+        delete nextItemHighlights[field];
+
+        if (Object.keys(nextItemHighlights).length === 0) {
+          const { [itemId]: _removedItem, ...remaining } = current;
+          return remaining;
+        }
+
+        return {
+          ...current,
+          [itemId]: nextItemHighlights,
+        };
+      });
+      delete highlightTimeoutRef.current[timeoutKey];
+    }, 1200);
+  };
+
+  const highlightIncomingChanges = (
+    previousItems: ShoppingItem[],
+    nextItems: ShoppingItem[],
+  ) => {
+    const previousItemMap = new Map(
+      previousItems.map((previousItem) => [previousItem.id, previousItem]),
+    );
+
+    for (const nextItem of nextItems) {
+      const previousItem = previousItemMap.get(nextItem.id);
+
+      if (!previousItem) {
+        continue;
+      }
+
+      if (previousItem.name !== nextItem.name) {
+        highlightItemField(nextItem.id, "name");
+      }
+      if (previousItem.actual_quantity !== nextItem.actual_quantity) {
+        highlightItemField(nextItem.id, "quantity");
+      }
+      if (
+        previousItem.actual_price !== nextItem.actual_price ||
+        previousItem.actual_price_excluding_tax !==
+          nextItem.actual_price_excluding_tax
+      ) {
+        highlightItemField(nextItem.id, "price");
+      }
+      if (previousItem.tax_rate !== nextItem.tax_rate) {
+        highlightItemField(nextItem.id, "taxRate");
+      }
+    }
+  };
 
   useEffect(() => {
     if (!supabase) {
@@ -223,7 +325,10 @@ export function App() {
     setEvents(data ?? []);
   };
 
-  const loadShoppingItems = async (eventId: string) => {
+  const loadShoppingItems = async (
+    eventId: string,
+    options: { highlightIncoming?: boolean } = {},
+  ) => {
     if (!supabase || !session) {
       return;
     }
@@ -246,7 +351,11 @@ export function App() {
       return;
     }
 
-    setShoppingItems(data ?? []);
+    const nextItems = data ?? [];
+    if (options.highlightIncoming) {
+      highlightIncomingChanges(shoppingItemsRef.current, nextItems);
+    }
+    setShoppingItems(nextItems);
   };
 
   const loadEventCategories = async (eventId: string) => {
@@ -349,7 +458,7 @@ export function App() {
           filter: `event_id=eq.${selectedEvent.id}`,
         },
         () => {
-          void loadShoppingItems(selectedEvent.id);
+          void loadShoppingItems(selectedEvent.id, { highlightIncoming: true });
         },
       )
       .subscribe();
@@ -778,24 +887,59 @@ export function App() {
       return;
     }
 
-    setErrorMessage("");
-    setShoppingItems((currentItems) =>
-      currentItems.map((currentItem) =>
-        currentItem.id === item.id
-          ? { ...currentItem, ...itemPayload }
-          : currentItem,
-      ),
-    );
+    const supabaseClient = supabase;
+    const eventId = selectedEvent.id;
+    const pendingSave = itemSaveQueueRef.current[item.id] ?? Promise.resolve();
 
-    const { error } = await supabase
-      .from("shopping_items")
-      .update(itemPayload)
-      .eq("id", item.id)
-      .eq("event_id", selectedEvent.id);
+    const nextSave = pendingSave
+      .catch(() => undefined)
+      .then(async () => {
+        const baseItem =
+          shoppingItemsRef.current.find(
+            (currentItem) => currentItem.id === item.id,
+          ) ?? item;
 
-    if (error) {
-      setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
-      await loadShoppingItems(selectedEvent.id);
+        setErrorMessage("");
+        setShoppingItems((currentItems) =>
+          currentItems.map((currentItem) =>
+            currentItem.id === item.id
+              ? { ...currentItem, ...itemPayload }
+              : currentItem,
+          ),
+        );
+
+        const { data, error } = await supabaseClient
+          .from("shopping_items")
+          .update(itemPayload)
+          .eq("id", item.id)
+          .eq("event_id", eventId)
+          .eq("updated_at", baseItem.updated_at)
+          .select(shoppingItemSelectColumns)
+          .maybeSingle();
+
+        if (error) {
+          setErrorMessage(SAVE_ITEM_ERROR_MESSAGE);
+          await loadShoppingItems(eventId);
+          return;
+        }
+
+        if (!data) {
+          setErrorMessage(ITEM_CONFLICT_ERROR_MESSAGE);
+          await loadShoppingItems(eventId);
+          return;
+        }
+
+        setShoppingItems((currentItems) =>
+          currentItems.map((currentItem) =>
+            currentItem.id === item.id ? data : currentItem,
+          ),
+        );
+      });
+
+    itemSaveQueueRef.current[item.id] = nextSave;
+    await nextSave;
+    if (itemSaveQueueRef.current[item.id] === nextSave) {
+      delete itemSaveQueueRef.current[item.id];
     }
   };
 
@@ -1668,7 +1812,11 @@ export function App() {
                                   </span>
                                   <input
                                     type="text"
-                                    className="item-name-input"
+                                    className={
+                                      highlightedItemFields[item.id]?.name
+                                        ? "item-name-input incoming-change-flash"
+                                        : "item-name-input"
+                                    }
                                     defaultValue={item.name}
                                     onBlur={(formEvent) =>
                                       handleItemNameBlur(
@@ -1687,7 +1835,13 @@ export function App() {
                                 </div>
                               </div>
                               <div className="inline-item-inputs">
-                                <label className="item-field">
+                                <label
+                                  className={
+                                    highlightedItemFields[item.id]?.quantity
+                                      ? "item-field incoming-change-flash"
+                                      : "item-field"
+                                  }
+                                >
                                   数量
                                   <input
                                     type="number"
@@ -1706,7 +1860,13 @@ export function App() {
                                     step="0.01"
                                   />
                                 </label>
-                                <label className="item-field">
+                                <label
+                                  className={
+                                    highlightedItemFields[item.id]?.price
+                                      ? "item-field incoming-change-flash"
+                                      : "item-field"
+                                  }
+                                >
                                   金額
                                   <div className="price-input-group">
                                     <select
@@ -1743,7 +1903,14 @@ export function App() {
                                 </label>
                               </div>
                               <div className="inline-item-meta">
-                                <div className="inline-tax-rate" aria-label="税率">
+                                <div
+                                  className={
+                                    highlightedItemFields[item.id]?.taxRate
+                                      ? "inline-tax-rate incoming-change-flash"
+                                      : "inline-tax-rate"
+                                  }
+                                  aria-label="税率"
+                                >
                                   {TAX_RATES.map((taxRate) => (
                                     <button
                                       key={taxRate}

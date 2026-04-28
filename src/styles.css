@@ -753,6 +753,10 @@ textarea:disabled {
   background: #fffdf8;
 }
 
+.incoming-change-flash {
+  animation: incoming-change-flash 1.2s ease-out;
+}
+
 .inline-item-inputs {
   display: grid;
   grid-template-columns: 84px minmax(220px, 320px);
@@ -780,6 +784,10 @@ textarea:disabled {
   gap: 8px;
 }
 
+.inline-tax-rate.incoming-change-flash {
+  border-radius: 8px;
+}
+
 .price-input-group {
   display: grid;
   grid-template-columns: 92px minmax(120px, 1fr);
@@ -797,6 +805,17 @@ textarea:disabled {
   color: #5a4738;
   font-size: 0.9rem;
   font-weight: 700;
+}
+
+@keyframes incoming-change-flash {
+  0% {
+    background-color: #fff4b0;
+    box-shadow: 0 0 0 2px rgb(255 228 122 / 70%);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 rgb(255 228 122 / 0%);
+  }
 }
 
 .report-view {
