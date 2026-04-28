@@ -229,6 +229,25 @@ p {
   font-size: clamp(2rem, 6vw, 3.2rem);
 }
 
+.remaining-budget-value {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.remaining-budget-value.is-low {
+  align-items: flex-end;
+}
+
+.low-budget-ebi {
+  width: clamp(42px, 7vw, 64px);
+  height: clamp(42px, 7vw, 64px);
+  flex: 0 0 auto;
+  object-fit: contain;
+  transform: translateY(4px) rotate(-7deg);
+}
+
 .summary-card.over-budget {
   border-color: #d9aaa0;
   background: #fff7f5;

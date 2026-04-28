@@ -10,6 +10,7 @@ import {
 } from "./lib/tax";
 import { supabase } from "./lib/supabase";
 import ebiIcon from "./icon/ebi.png";
+import yellowEbiIcon from "./icon/ebi.yellow.png";
 
 const LOGIN_ERROR_MESSAGE = "ログインできませんでした";
 const FETCH_EVENTS_ERROR_MESSAGE = "データの取得に失敗しました";
@@ -20,6 +21,7 @@ const VALIDATION_ERROR_MESSAGE = "入力内容を確認してください";
 const ALL_CATEGORY_KEY = "__all__";
 const UNCATEGORIZED_CATEGORY_KEY = "__uncategorized__";
 const UNCATEGORIZED_CATEGORY_LABEL = "未分類";
+const LOW_REMAINING_BUDGET_THRESHOLD = 10000;
 
 type EventViewMode = "shopping" | "report";
 
@@ -107,6 +109,15 @@ const pushUniqueCategory = (categories: string[], categoryName: string) => {
   }
 };
 
+const omitRecordKey = <T,>(record: Record<string, T>, keyToOmit: string) =>
+  Object.entries(record).reduce<Record<string, T>>((nextRecord, [key, value]) => {
+    if (key !== keyToOmit) {
+      nextRecord[key] = value;
+    }
+
+    return nextRecord;
+  }, {});
+
 export function App() {
   const isSupabaseConfigured = Boolean(supabase);
   const [session, setSession] = useState<Session | null>(null);
@@ -142,6 +153,9 @@ export function App() {
   const [selectedCategoryKey, setSelectedCategoryKey] =
     useState(ALL_CATEGORY_KEY);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, string>>(
+    {},
+  );
 
   const selectedEvent =
     events.find((bbqEvent) => bbqEvent.id === selectedEventId) ?? null;
@@ -172,6 +186,7 @@ export function App() {
         setPriceInputModes({});
         setSelectedCategoryKey(ALL_CATEGORY_KEY);
         setCustomCategories([]);
+        setCategoryDrafts({});
       }
       setIsCheckingSession(false);
     });
@@ -246,11 +261,13 @@ export function App() {
       setShoppingItems([]);
       setSelectedCategoryKey(ALL_CATEGORY_KEY);
       setCustomCategories([]);
+      setCategoryDrafts({});
       return;
     }
 
     setSelectedCategoryKey(ALL_CATEGORY_KEY);
     setCustomCategories([]);
+    setCategoryDrafts({});
     void loadShoppingItems(selectedEvent.id);
   }, [selectedEvent?.id]);
 
@@ -740,10 +757,17 @@ export function App() {
 
     if (!nextCategoryName || nextCategoryName.length > 80) {
       setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      setCategoryDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [categoryKey]: getCategoryLabel(categoryKey),
+      }));
       return;
     }
 
     if (nextCategoryName === getCategoryLabel(categoryKey)) {
+      setCategoryDrafts((currentDrafts) =>
+        omitRecordKey(currentDrafts, categoryKey),
+      );
       return;
     }
 
@@ -786,6 +810,10 @@ export function App() {
       return nextCategories;
     });
     setSelectedCategoryKey(nextCategoryName);
+    setCategoryDrafts((currentDrafts) => {
+      const nextDrafts = omitRecordKey(currentDrafts, categoryKey);
+      return omitRecordKey(nextDrafts, nextCategoryName);
+    });
     await loadShoppingItems(selectedEvent.id);
   };
 
@@ -1053,6 +1081,8 @@ export function App() {
   );
   const remainingBudget =
     selectedEvent === null ? 0 : selectedEvent.budget - checkedPurchaseTotal;
+  const isRemainingBudgetLow =
+    selectedEvent !== null && remainingBudget < LOW_REMAINING_BUDGET_THRESHOLD;
   const reportItemGroups = shoppingItems.reduce(
     (groups, item) => {
       if (isItemInCart(item)) {
@@ -1221,7 +1251,23 @@ export function App() {
                     </div>
                     <div className="summary-line summary-line-remaining">
                       <span>あと購入できる金額</span>
-                      <strong>{formatYen(remainingBudget)}</strong>
+                      <div
+                        className={
+                          isRemainingBudgetLow
+                            ? "remaining-budget-value is-low"
+                            : "remaining-budget-value"
+                        }
+                      >
+                        <strong>{formatYen(remainingBudget)}</strong>
+                        {isRemainingBudgetLow && (
+                          <img
+                            src={yellowEbiIcon}
+                            alt=""
+                            className="low-budget-ebi"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -1399,8 +1445,21 @@ export function App() {
                           {category.isEditable ? (
                             <input
                               type="text"
-                              defaultValue={category.label}
-                              onFocus={() => setSelectedCategoryKey(category.key)}
+                              value={categoryDrafts[category.key] ?? category.label}
+                              onChange={(formEvent) =>
+                                setCategoryDrafts((currentDrafts) => ({
+                                  ...currentDrafts,
+                                  [category.key]: formEvent.target.value,
+                                }))
+                              }
+                              onFocus={() => {
+                                setSelectedCategoryKey(category.key);
+                                setCategoryDrafts((currentDrafts) => ({
+                                  ...currentDrafts,
+                                  [category.key]:
+                                    currentDrafts[category.key] ?? category.label,
+                                }));
+                              }}
                               onBlur={(formEvent) =>
                                 handleCategoryNameBlur(
                                   category.key,
