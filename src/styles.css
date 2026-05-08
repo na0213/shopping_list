@@ -374,6 +374,26 @@ p {
   justify-content: space-between;
 }
 
+.refresh-button {
+  display: grid;
+  width: 44px;
+  min-height: 44px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #255c43;
+  padding: 0;
+}
+
+.refresh-button.has-pending {
+  color: #7a4a00;
+}
+
+.refresh-icon {
+  width: 24px;
+  height: 24px;
+}
+
 .section-lead {
   margin: 6px 0 0;
   color: #4d574d;

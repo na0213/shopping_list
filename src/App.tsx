@@ -128,10 +128,16 @@ export function App() {
   const [events, setEvents] = useState<BbqEvent[]>([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [isUpdatingEvent, setIsUpdatingEvent] = useState(false);
   const [eventName, setEventName] = useState("");
   const [eventYear, setEventYear] = useState(String(getCurrentYear()));
   const [eventBudget, setEventBudget] = useState("0");
   const [eventNote, setEventNote] = useState("");
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editEventName, setEditEventName] = useState("");
+  const [editEventYear, setEditEventYear] = useState(String(getCurrentYear()));
+  const [editEventBudget, setEditEventBudget] = useState("0");
+  const [editEventNote, setEditEventNote] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [shoppingItems, setShoppingItems] = useState<ShoppingItem[]>([]);
   const [eventCategories, setEventCategories] = useState<EventCategory[]>([]);
@@ -141,10 +147,17 @@ export function App() {
   const [priceInputModes, setPriceInputModes] = useState<
     Record<string, PriceInputMode>
   >({});
+  const [itemQuantityDrafts, setItemQuantityDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [itemPriceDrafts, setItemPriceDrafts] = useState<Record<string, string>>(
+    {},
+  );
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState("");
   const [isSavingBudget, setIsSavingBudget] = useState(false);
   const [isCreateEventOpen, setIsCreateEventOpen] = useState(false);
+  const [isEditEventOpen, setIsEditEventOpen] = useState(false);
   const [eventViewMode, setEventViewMode] =
     useState<EventViewMode>("shopping");
   const [isCompletingEvent, setIsCompletingEvent] = useState(false);
@@ -159,6 +172,9 @@ export function App() {
   const [highlightedItemFields, setHighlightedItemFields] = useState<
     Record<string, Partial<Record<ItemHighlightField, boolean>>>
   >({});
+  const [hasPendingRemoteChanges, setHasPendingRemoteChanges] = useState(false);
+  const [isRefreshingRemoteChanges, setIsRefreshingRemoteChanges] =
+    useState(false);
   const highlightTimeoutRef = useRef<Record<string, number>>({});
   const shoppingItemsRef = useRef<ShoppingItem[]>([]);
   const itemSaveQueueRef = useRef<Record<string, Promise<void>>>({});
@@ -392,6 +408,8 @@ export function App() {
       setSelectedCategoryKey(ALL_CATEGORY_KEY);
       setItemCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
       setCategoryName("");
+      setItemQuantityDrafts({});
+      setItemPriceDrafts({});
       setIsCategoryModalOpen(false);
       return;
     }
@@ -399,6 +417,8 @@ export function App() {
     setSelectedCategoryKey(ALL_CATEGORY_KEY);
     setItemCategoryKey(UNCATEGORIZED_CATEGORY_KEY);
     setCategoryName("");
+    setItemQuantityDrafts({});
+    setItemPriceDrafts({});
     void loadShoppingItems(selectedEvent.id);
     void loadEventCategories(selectedEvent.id);
   }, [selectedEvent?.id]);
@@ -424,6 +444,22 @@ export function App() {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isCreateEventOpen, isCreatingEvent]);
+
+  useEffect(() => {
+    if (!isEditEventOpen) {
+      return;
+    }
+
+    const handleKeyDown = (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.key === "Escape" && !isUpdatingEvent) {
+        setErrorMessage("");
+        setIsEditEventOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isEditEventOpen, isUpdatingEvent]);
 
   useEffect(() => {
     if (!isCategoryModalOpen) {
@@ -458,7 +494,7 @@ export function App() {
           filter: `event_id=eq.${selectedEvent.id}`,
         },
         () => {
-          void loadShoppingItems(selectedEvent.id, { highlightIncoming: true });
+          setHasPendingRemoteChanges(true);
         },
       )
       .subscribe();
@@ -485,7 +521,7 @@ export function App() {
           filter: `event_id=eq.${selectedEvent.id}`,
         },
         () => {
-          void loadEventCategories(selectedEvent.id);
+          setHasPendingRemoteChanges(true);
         },
       )
       .subscribe();
@@ -604,6 +640,84 @@ export function App() {
     setIsCreateEventOpen(false);
   };
 
+  const handleOpenEditEvent = (bbqEvent: BbqEvent) => {
+    setErrorMessage("");
+    setEditingEventId(bbqEvent.id);
+    setEditEventName(bbqEvent.name);
+    setEditEventYear(String(bbqEvent.year));
+    setEditEventBudget(String(bbqEvent.budget));
+    setEditEventNote(bbqEvent.note ?? "");
+    setIsEditEventOpen(true);
+  };
+
+  const handleCloseEditEvent = () => {
+    if (isUpdatingEvent) {
+      return;
+    }
+    setErrorMessage("");
+    setIsEditEventOpen(false);
+  };
+
+  const handleUpdateEvent = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage("");
+
+    const normalizedName = editEventName.trim();
+    const normalizedNote = editEventNote.trim();
+    const parsedYear = Number(editEventYear);
+    const parsedBudget = Number(editEventBudget);
+
+    if (
+      !supabase ||
+      !session ||
+      !editingEventId ||
+      !normalizedName ||
+      !Number.isInteger(parsedYear) ||
+      parsedYear < 2000 ||
+      parsedYear > 2100 ||
+      !Number.isInteger(parsedBudget) ||
+      parsedBudget < 0
+    ) {
+      setErrorMessage(VALIDATION_ERROR_MESSAGE);
+      return;
+    }
+
+    setIsUpdatingEvent(true);
+
+    const { error } = await supabase
+      .from("events")
+      .update({
+        name: normalizedName,
+        year: parsedYear,
+        budget: parsedBudget,
+        note: normalizedNote || null,
+      })
+      .eq("id", editingEventId);
+
+    setIsUpdatingEvent(false);
+
+    if (error) {
+      setErrorMessage(SAVE_EVENT_ERROR_MESSAGE);
+      return;
+    }
+
+    setEvents((currentEvents) =>
+      currentEvents.map((currentEvent) =>
+        currentEvent.id === editingEventId
+          ? {
+              ...currentEvent,
+              name: normalizedName,
+              year: parsedYear,
+              budget: parsedBudget,
+              note: normalizedNote || null,
+            }
+          : currentEvent,
+      ),
+    );
+    setIsEditEventOpen(false);
+    setEditingEventId(null);
+  };
+
   const handleOpenCategoryModal = () => {
     setErrorMessage("");
     setCategoryName("");
@@ -626,6 +740,7 @@ export function App() {
     setErrorMessage("");
     resetItemForm();
     setEventViewMode("shopping");
+    setHasPendingRemoteChanges(false);
     setSelectedEventId(bbqEvent.id);
   };
 
@@ -638,6 +753,24 @@ export function App() {
     setSelectedEventId(null);
     setShoppingItems([]);
     setEventCategories([]);
+    setHasPendingRemoteChanges(false);
+  };
+
+  const handleRefreshRemoteChanges = async () => {
+    if (!selectedEvent || isRefreshingRemoteChanges) {
+      return;
+    }
+
+    setIsRefreshingRemoteChanges(true);
+    try {
+      await Promise.all([
+        loadShoppingItems(selectedEvent.id, { highlightIncoming: true }),
+        loadEventCategories(selectedEvent.id),
+      ]);
+      setHasPendingRemoteChanges(false);
+    } finally {
+      setIsRefreshingRemoteChanges(false);
+    }
   };
 
   const handleBudgetBlur = async () => {
@@ -846,12 +979,21 @@ export function App() {
 
     setIsSavingItem(true);
 
+    const nextSortOrder =
+      shoppingItems.length === 0
+        ? 0
+        : shoppingItems.reduce(
+            (currentMinSortOrder, item) =>
+              Math.min(currentMinSortOrder, item.sort_order),
+            shoppingItems[0].sort_order,
+          ) - 1;
+
     const { error } = await supabase.from("shopping_items").insert({
       name: normalizedName,
       category: normalizedCategory,
       event_id: selectedEvent.id,
       is_extra: true,
-      sort_order: shoppingItems.length,
+      sort_order: nextSortOrder,
       tax_rate: DEFAULT_TAX_RATE,
     });
 
@@ -1026,7 +1168,8 @@ export function App() {
     priceInputModes[item.id] ?? "taxIncluded";
 
   const getItemQuantityValue = (item: ShoppingItem) =>
-    item.actual_quantity ?? item.planned_quantity ?? "";
+    itemQuantityDrafts[item.id] ??
+    String(item.actual_quantity ?? item.planned_quantity ?? "");
 
   const getItemNumericQuantity = (item: ShoppingItem) =>
     item.actual_quantity ?? item.planned_quantity;
@@ -1042,6 +1185,11 @@ export function App() {
   ) => taxIncludedPrice !== null || taxExcludedPrice !== null;
 
   const getItemPriceInputValue = (item: ShoppingItem) => {
+    const draftValue = itemPriceDrafts[item.id];
+    if (draftValue !== undefined) {
+      return draftValue;
+    }
+
     const inputMode = getItemPriceInputMode(item);
 
     if (inputMode === "taxExcluded") {
@@ -1076,21 +1224,42 @@ export function App() {
     await saveShoppingItemPatch(item, { name: normalizedName });
   };
 
-  const handleItemQuantityChange = async (item: ShoppingItem, value: string) => {
-    const actualQuantity = parseOptionalNumber(value);
-    const hasInvalidQuantity = value.trim() && actualQuantity === null;
+  const handleItemQuantityChange = (itemId: string, value: string) => {
+    setItemQuantityDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [itemId]: value,
+    }));
+    setErrorMessage("");
+  };
+
+  const handleItemQuantityBlur = async (item: ShoppingItem) => {
+    const draftValue = itemQuantityDrafts[item.id];
+    if (draftValue === undefined) {
+      return;
+    }
+
+    const actualQuantity = parseOptionalNumber(draftValue);
+    const hasInvalidQuantity = draftValue.trim() && actualQuantity === null;
 
     if (hasInvalidQuantity) {
       setErrorMessage(VALIDATION_ERROR_MESSAGE);
       return;
     }
 
-    await saveShoppingItemPatch(item, {
-      actual_quantity: actualQuantity,
-      is_checked: shouldAutoCheckItem(
-        item.actual_price,
-        item.actual_price_excluding_tax,
-      ),
+    const currentQuantity = item.actual_quantity ?? item.planned_quantity ?? null;
+    if (actualQuantity !== currentQuantity) {
+      await saveShoppingItemPatch(item, {
+        actual_quantity: actualQuantity,
+        is_checked: shouldAutoCheckItem(
+          item.actual_price,
+          item.actual_price_excluding_tax,
+        ),
+      });
+    }
+
+    setItemQuantityDrafts((currentDrafts) => {
+      const { [item.id]: _removedDraft, ...restDrafts } = currentDrafts;
+      return restDrafts;
     });
   };
 
@@ -1104,12 +1273,22 @@ export function App() {
     }));
   };
 
-  const handleItemPriceChange = async (
-    item: ShoppingItem,
-    value: string,
-  ) => {
-    const price = parseOptionalInteger(value);
-    const hasInvalidPrice = value.trim() && price === null;
+  const handleItemPriceChange = (itemId: string, value: string) => {
+    setItemPriceDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [itemId]: value,
+    }));
+    setErrorMessage("");
+  };
+
+  const handleItemPriceBlur = async (item: ShoppingItem) => {
+    const draftValue = itemPriceDrafts[item.id];
+    if (draftValue === undefined) {
+      return;
+    }
+
+    const price = parseOptionalInteger(draftValue);
+    const hasInvalidPrice = draftValue.trim() && price === null;
 
     if (hasInvalidPrice) {
       setErrorMessage(VALIDATION_ERROR_MESSAGE);
@@ -1117,6 +1296,18 @@ export function App() {
     }
 
     const inputMode = getItemPriceInputMode(item);
+    const currentPrice =
+      inputMode === "taxExcluded"
+        ? item.actual_price_excluding_tax
+        : item.actual_price;
+    if (price === currentPrice) {
+      setItemPriceDrafts((currentDrafts) => {
+        const { [item.id]: _removedDraft, ...restDrafts } = currentDrafts;
+        return restDrafts;
+      });
+      return;
+    }
+
     const actualPrice =
       price === null
         ? null
@@ -1134,6 +1325,11 @@ export function App() {
       actual_price_excluding_tax: actualPriceExcludingTax,
       actual_price: actualPrice,
       is_checked: shouldAutoCheckItem(actualPrice, actualPriceExcludingTax),
+    });
+
+    setItemPriceDrafts((currentDrafts) => {
+      const { [item.id]: _removedDraft, ...restDrafts } = currentDrafts;
+      return restDrafts;
     });
   };
 
@@ -1308,7 +1504,7 @@ export function App() {
     }
 
     const quantity = getItemNumericQuantity(item) ?? 1;
-    return (item.actual_price ?? 0) * quantity;
+    return (getItemTaxIncludedPrice(item) ?? 0) * quantity;
   };
   const checkedPurchaseTotal = shoppingItems.reduce(
     (total, item) => total + getItemLineTotal(item),
@@ -1340,6 +1536,17 @@ export function App() {
     (item.actual_price === null
       ? null
       : calculateTaxExcludedPrice(item.actual_price, getItemTaxRate(item)));
+  function getItemTaxIncludedPrice(item: ShoppingItem) {
+    return (
+      item.actual_price ??
+      (item.actual_price_excluding_tax === null
+        ? null
+        : calculateTaxIncludedPrice(
+            item.actual_price_excluding_tax,
+            getItemTaxRate(item),
+          ))
+    );
+  }
   const getItemQuantityLabel = (item: ShoppingItem) => {
     const quantity = getItemNumericQuantity(item);
     return quantity === null ? "数量未入力" : `数量 ${quantity}`;
@@ -1566,7 +1773,7 @@ export function App() {
                                     {formatYen(getItemLineTotal(item))}
                                   </strong>
                                   <span>
-                                    単価 {formatYen(item.actual_price ?? 0)}
+                                    単価 {formatYen(getItemTaxIncludedPrice(item) ?? 0)}
                                     {" / "}
                                     {getItemQuantityLabel(item)}
                                     {" / "}
@@ -1609,7 +1816,10 @@ export function App() {
                                         {formatYen(getItemLineTotal(item))}
                                       </strong>
                                       <span>
-                                        単価 {formatYen(item.actual_price ?? 0)}
+                                        単価{" "}
+                                        {formatYen(
+                                          getItemTaxIncludedPrice(item) ?? 0,
+                                        )}
                                         {" / "}
                                         {getItemQuantityLabel(item)}
                                         {" / "}
@@ -1716,6 +1926,55 @@ export function App() {
                     </div>
                     <div className="section-header">
                       <h2 id="item-list">買い物リスト</h2>
+                      <button
+                        type="button"
+                        className={
+                          hasPendingRemoteChanges
+                            ? "refresh-button has-pending"
+                            : "refresh-button"
+                        }
+                        title={
+                          isRefreshingRemoteChanges
+                            ? "更新中..."
+                            : hasPendingRemoteChanges
+                              ? "更新があります。押すと反映します"
+                              : "最新の情報に更新"
+                        }
+                        aria-label={
+                          isRefreshingRemoteChanges
+                            ? "更新中"
+                            : hasPendingRemoteChanges
+                              ? "更新があります。押すと反映します"
+                              : "最新の情報に更新"
+                        }
+                        onClick={() => {
+                          void handleRefreshRemoteChanges();
+                        }}
+                        disabled={isLoadingItems || isRefreshingRemoteChanges}
+                      >
+                        <svg
+                          className="refresh-icon"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                          focusable="false"
+                        >
+                          <path
+                            d="M20 12a8 8 0 1 1-2.34-5.66"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                          <path
+                            d="M20 4v4h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
                     </div>
                     {isLoadingItems ? (
                       <p className="status-message" role="status">
@@ -1849,13 +2108,21 @@ export function App() {
                                     value={getItemQuantityValue(item)}
                                     onChange={(formEvent) =>
                                       handleItemQuantityChange(
-                                        item,
+                                        item.id,
                                         formEvent.target.value,
                                       )
                                     }
+                                    onBlur={() => {
+                                      void handleItemQuantityBlur(item);
+                                    }}
                                     onFocus={(formEvent) =>
                                       formEvent.target.select()
                                     }
+                                    onKeyDown={(keyboardEvent) => {
+                                      if (keyboardEvent.key === "Enter") {
+                                        keyboardEvent.currentTarget.blur();
+                                      }
+                                    }}
                                     min="0"
                                     step="0.01"
                                   />
@@ -1889,13 +2156,21 @@ export function App() {
                                       value={getItemPriceInputValue(item)}
                                       onChange={(formEvent) =>
                                         handleItemPriceChange(
-                                          item,
+                                          item.id,
                                           formEvent.target.value,
                                         )
                                       }
+                                      onBlur={() => {
+                                        void handleItemPriceBlur(item);
+                                      }}
                                       onFocus={(formEvent) =>
                                         formEvent.target.select()
                                       }
+                                      onKeyDown={(keyboardEvent) => {
+                                        if (keyboardEvent.key === "Enter") {
+                                          keyboardEvent.currentTarget.blur();
+                                        }
+                                      }}
                                       min="0"
                                       step="1"
                                     />
@@ -1980,6 +2255,13 @@ export function App() {
                               ? "完了"
                               : "進行中"}
                           </span>
+                          <button
+                            type="button"
+                            className="secondary-button compact-button"
+                            onClick={() => handleOpenEditEvent(bbqEvent)}
+                          >
+                            編集
+                          </button>
                           <button
                             type="button"
                             className="secondary-button compact-button"
@@ -2196,6 +2478,115 @@ export function App() {
                       </button>
                       <button type="submit" disabled={isCreatingEvent}>
                         {isCreatingEvent ? "作成中" : "作成"}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {isEditEventOpen && (
+              <div
+                className="modal-backdrop"
+                onClick={handleCloseEditEvent}
+                role="presentation"
+              >
+                <div
+                  className="modal-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="edit-event-title"
+                  onClick={(modalEvent) => modalEvent.stopPropagation()}
+                >
+                  <header className="modal-header">
+                    <h2 id="edit-event-title">イベント編集</h2>
+                    <button
+                      type="button"
+                      className="modal-close"
+                      onClick={handleCloseEditEvent}
+                      aria-label="閉じる"
+                      disabled={isUpdatingEvent}
+                    >
+                      ×
+                    </button>
+                  </header>
+                  <form className="event-form" onSubmit={handleUpdateEvent}>
+                    <label>
+                      イベント名
+                      <input
+                        type="text"
+                        name="editEventName"
+                        value={editEventName}
+                        onChange={(formEvent) =>
+                          setEditEventName(formEvent.target.value)
+                        }
+                        disabled={isUpdatingEvent}
+                        required
+                        maxLength={120}
+                        autoFocus
+                      />
+                    </label>
+                    <div className="form-grid">
+                      <label>
+                        開催年
+                        <input
+                          type="number"
+                          name="editEventYear"
+                          value={editEventYear}
+                          onChange={(formEvent) =>
+                            setEditEventYear(formEvent.target.value)
+                          }
+                          disabled={isUpdatingEvent}
+                          min="2000"
+                          max="2100"
+                          step="1"
+                          required
+                        />
+                      </label>
+                      <label>
+                        予算
+                        <input
+                          type="number"
+                          name="editEventBudget"
+                          value={editEventBudget}
+                          onChange={(formEvent) =>
+                            setEditEventBudget(formEvent.target.value)
+                          }
+                          disabled={isUpdatingEvent}
+                          min="0"
+                          step="1"
+                          required
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      メモ
+                      <textarea
+                        name="editEventNote"
+                        value={editEventNote}
+                        onChange={(formEvent) =>
+                          setEditEventNote(formEvent.target.value)
+                        }
+                        disabled={isUpdatingEvent}
+                        maxLength={2000}
+                      />
+                    </label>
+                    {errorMessage && (
+                      <p className="error-message" role="alert">
+                        {errorMessage}
+                      </p>
+                    )}
+                    <div className="modal-form-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCloseEditEvent}
+                        disabled={isUpdatingEvent}
+                      >
+                        キャンセル
+                      </button>
+                      <button type="submit" disabled={isUpdatingEvent}>
+                        {isUpdatingEvent ? "保存中" : "保存"}
                       </button>
                     </div>
                   </form>
