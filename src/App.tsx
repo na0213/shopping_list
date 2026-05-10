@@ -2,7 +2,6 @@ import { type DragEvent, type FormEvent, useEffect, useRef, useState } from "rea
 import type { Session } from "@supabase/supabase-js";
 import {
   DEFAULT_TAX_RATE,
-  TAX_RATES,
   calculateTaxExcludedPrice,
   calculateTaxIncludedPrice,
   isTaxRate,
@@ -2136,20 +2135,37 @@ export function App() {
                                 >
                                   金額
                                   <div className="price-input-group">
-                                    <select
-                                      value={getItemPriceInputMode(item)}
-                                      onChange={(formEvent) =>
+                                    <button
+                                      type="button"
+                                      className={
+                                        getItemPriceInputMode(item) ===
+                                        "taxExcluded"
+                                          ? "price-mode-toggle is-excluded"
+                                          : "price-mode-toggle"
+                                      }
+                                      role="switch"
+                                      aria-checked={
+                                        getItemPriceInputMode(item) ===
+                                        "taxExcluded"
+                                      }
+                                      aria-label={`${item.name}の金額種別。オフは税込、オンは税抜`}
+                                      onClick={() =>
                                         handleItemPriceModeChange(
                                           item,
-                                          formEvent.target
-                                            .value as PriceInputMode,
+                                          getItemPriceInputMode(item) ===
+                                            "taxExcluded"
+                                            ? "taxIncluded"
+                                            : "taxExcluded",
                                         )
                                       }
-                                      aria-label={`${item.name}の金額種別`}
                                     >
-                                      <option value="taxIncluded">税込</option>
-                                      <option value="taxExcluded">税抜</option>
-                                    </select>
+                                      <span className="price-mode-toggle-option">
+                                        税込
+                                      </span>
+                                      <span className="price-mode-toggle-option">
+                                        税抜
+                                      </span>
+                                    </button>
                                     <input
                                       type="number"
                                       inputMode="numeric"
@@ -2186,25 +2202,30 @@ export function App() {
                                   }
                                   aria-label="税率"
                                 >
-                                  {TAX_RATES.map((taxRate) => (
-                                    <button
-                                      key={taxRate}
-                                      type="button"
-                                      className={
-                                        getItemTaxRate(item) === taxRate
-                                          ? "tax-rate-button active compact-button"
-                                          : "tax-rate-button compact-button"
-                                      }
-                                      onClick={() =>
-                                        handleItemTaxRateChange(item, taxRate)
-                                      }
-                                      aria-pressed={
-                                        getItemTaxRate(item) === taxRate
-                                      }
-                                    >
-                                      {taxRate}%
-                                    </button>
-                                  ))}
+                                  <button
+                                    type="button"
+                                    className={
+                                      getItemTaxRate(item) === 10
+                                        ? "tax-toggle is-on"
+                                        : "tax-toggle"
+                                    }
+                                    role="switch"
+                                    aria-checked={getItemTaxRate(item) === 10}
+                                    aria-label="消費税率。オフは8%、オンは10%"
+                                    onClick={() =>
+                                      handleItemTaxRateChange(
+                                        item,
+                                        getItemTaxRate(item) === 10 ? 8 : 10,
+                                      )
+                                    }
+                                  >
+                                    <span className="tax-toggle-option">
+                                      8%
+                                    </span>
+                                    <span className="tax-toggle-option">
+                                      10%
+                                    </span>
+                                  </button>
                                 </div>
                                 {itemHasPrice(item) && (
                                   <span className="calculated-price">
